@@ -4,7 +4,7 @@ import { Spring } from "../_shared/spring.js"
 const { renderer, input, math, run, finish, } = createEngine()
 const { ctx, canvas } = renderer
 
-
+let alphaLvl = 1; // global alpha for selected rects
 
   class ClassRect {
   constructor(x, y, size, ctx) {
@@ -16,18 +16,18 @@ const { ctx, canvas } = renderer
 
 
   // draw with controllable opacity (0..1)
-  drawWhite(alpha = 1) {
+  drawWhite() {
     this.ctx.save();
-    this.ctx.globalAlpha = alpha;
+    this.ctx.globalAlpha = alphaLvl;
     this.ctx.fillStyle = "white";
     this.ctx.fillRect(this.x, this.y, this.size, this.size);
     this.ctx.restore();
   }
 
   // draw black with alpha (for fade-out)
-  drawBlack(alpha = 1) {
+  drawBlack() {
     this.ctx.save();
-    this.ctx.globalAlpha = alpha;
+    this.ctx.globalAlpha = 0;
     this.ctx.fillStyle = "red";
     this.ctx.fillRect(this.x, this.y, this.size, this.size);
     this.ctx.restore();
