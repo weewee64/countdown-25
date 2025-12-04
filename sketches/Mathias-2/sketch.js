@@ -1,11 +1,17 @@
 import { createEngine } from "../_shared/engine.js"
-import { Spring } from "../_shared/spring.js"
+// import { Spring } from "../_shared/spring.js"
 
 const { renderer, input, math, run, finish, } = createEngine()
 const { ctx, canvas } = renderer
 
 canvas.style.cursor = "pointer";
+/*
+canvas.style.width = 'canvas.width';
+canvas.style.height = 'canvas.width';
 
+canvas.width = canvas.width * window.devicePixelRatio ;
+canvas.height = canvas.height * window.devicePixelRatio ;
+*/
   class ClassRect {
   constructor(x, y, size, ctx) {
     this.x = x;
@@ -184,8 +190,8 @@ let clickCount = 0;
 // small canvas punch rotation (spring)
 let punchAngle = 0;
 let punchVel = 0;
-const punchSpring = 50; // stiffness
-const punchDamp = 1; // damping
+const punchSpring = 800; // stiffness
+const punchDamp = 56; // damping
 
 // rotating-mask selection: after a short delay one mask will tilt/rotate
 let rotatingMaskIndex = -1;
@@ -296,7 +302,7 @@ canvas.addEventListener('click', (e) => {
   });
 
   // apply a small punch impulse to the canvas rotation on every click
-  const impulse = 0.06; // radians
+  const impulse = 4; // radians
   punchVel += (Math.random() < 0.5 ? -1 : 1) * impulse;
 
 
@@ -358,7 +364,6 @@ function update(dt) {
   const MAX_DT = 1 / 30; // ~33ms per frame
   dt = Math.min(dt, MAX_DT);
 
-  canvas.style.background = "black";
 
   // --- Canvas "punch" rotation (damped spring) ---
   // Use a simple spring: angular acceleration = -k * angle - c * angularVelocity
@@ -473,10 +478,10 @@ for (let index = 0; index < mask.length; index++) {
     endSequenceScheduled = true;
     setTimeout(() => {
       globalAlpha = 0;
-    }, 500);
+    }, 1500);
     setTimeout(() => {
       finish();
-    }, 1000);
+    }, 2000);
   }
 
 }

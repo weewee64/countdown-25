@@ -367,8 +367,8 @@ function update(dt) {
       if (currentScale >= targetScale) {
         setTimeout(() => {
           globalAlpha = 0;
-        }, 500);
-        setTimeout(() => {finish();}, 1000);
+        }, 1500);
+        setTimeout(() => {finish();}, 2000);
         
       }
     }

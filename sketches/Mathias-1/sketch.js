@@ -57,6 +57,8 @@ let selectedSubset = [];
 let subsetCreated = false;
 // target slots derived from the selected subset; any body can occupy any free slot
 let slots = [];
+// slot hover highlight radius (px)
+const SLOT_HIGHLIGHT_RADIUS = 120;
 
 function pickRandomSubsetFromSelected(count) {
   const out = [];
@@ -498,6 +500,25 @@ function update(dt) {
     rect.drawBlack();
   });
 
+  // draw slot highlights (if slots exist) based on mouse proximity
+  if (slots && slots.length > 0) {
+    for (const slot of slots) {
+      const cx = slot.x + slot.size / 2;
+      const cy = slot.y + slot.size / 2;
+      const dx = mouseX - cx;
+      const dy = mouseY - cy;
+      const d = Math.hypot(dx, dy);
+      // proximity t in [0..1] where 1 is at center, 0 at or beyond radius
+      const t = Math.max(0, 1 - d / SLOT_HIGHLIGHT_RADIUS);
+      const grey = Math.round(t * 180); // 0..180 grey range
+      ctx.save();
+      ctx.globalAlpha = 1; // slot highlight opacity (can be adjusted)
+      ctx.fillStyle = `rgb(${grey}, ${grey}, ${grey})`;
+      ctx.fillRect(slot.x, slot.y, slot.size, slot.size);
+      ctx.restore();
+    }
+  }
+
   // draw the physics-driven subset last so they render on top of the grid
   if (subsetCreated) {
     for (const entry of selectedSubset) {
@@ -506,10 +527,7 @@ function update(dt) {
       }
     }
   }
-  // animate global fade when triggered
-  if (fadeAll) {
-    alphaLvl = Math.max(0, alphaLvl - dt / FADE_ALL_DURATION);
-  }
+
 
   // advance global scale toward target when scaling is active
   if (scaling) {
@@ -527,10 +545,10 @@ function update(dt) {
     endSequenceScheduled = true;
     setTimeout(() => {
       globalAlpha = 0;
-    }, 500);
+    }, 1500);
     setTimeout(() => {
       try { finish(); } catch (e) { console.warn('finish() failed', e); }
-    }, 1000);
+    }, 2000);
   }
 }
 
