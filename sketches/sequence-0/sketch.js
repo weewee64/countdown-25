@@ -5,6 +5,19 @@ const { renderer, input, math, run, finish, } = createEngine()
 const { ctx, canvas } = renderer
 
 let alphaLvl = 1; // global alpha for selected rects
+// scale state (applies to drawWhite)
+let scale = 0;
+// configuration for scale change per second
+const SCALE_RATE = 0.3; // units per second
+const SCALE_MIN = 0.001;
+const SCALE_MAX = 0.2;
+
+
+/*
+const spring = new Spring({
+  position: 0
+}) */
+
 
   class ClassRect {
   constructor(x, y, size, ctx) {
@@ -15,17 +28,22 @@ let alphaLvl = 1; // global alpha for selected rects
   }
 
 
-  // draw with controllable opacity (0..1)
-  drawWhite() {
+
+  // draw with controllable opacity (0..1) and optional scale
+  drawWhite(s = 1) {
     this.ctx.save();
     this.ctx.globalAlpha = alphaLvl;
+    const cx = this.x + this.size / 2;
+    const cy = this.y + this.size / 2;
+    this.ctx.translate(cx, cy);
+    this.ctx.scale(s, s);
     this.ctx.fillStyle = "white";
-    this.ctx.fillRect(this.x, this.y, this.size, this.size);
+    this.ctx.fillRect(-this.size / 2, -this.size / 2, this.size, this.size);
     this.ctx.restore();
   }
 
   // draw black with alpha (for fade-out)
-  drawBlack() {
+  drawNot() {
     this.ctx.save();
     this.ctx.globalAlpha = 0;
     this.ctx.fillStyle = "red";
@@ -109,17 +127,21 @@ let others = [];
 
 function update(dt) {
   canvas.style.background = "black";
+  // advance scale based on dt (frame-rate independent)
+  scale += SCALE_RATE * dt; // linear growth per second
+  // clamp scale to reasonable range
+  scale = Math.max(SCALE_MIN, Math.min(SCALE_MAX, scale));
 
 
   // draw selected: combine fade-in, revealed, proximity-based alpha and fade-outs
   selected.forEach(({ rect, i }) => {
-    rect.drawWhite();
+    rect.drawWhite(scale);
   });
 
-  // draw non-selected rects, respect fade-outs
-  others.forEach(({ rect, i }) => {
-    rect.drawBlack();
-  });
+  // do not draw non-selected rects
+  /*others.forEach(({ rect, i }) => {
+    rect.drawNot();
+  }); */
 }
 
 run(update)

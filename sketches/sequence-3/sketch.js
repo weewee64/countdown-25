@@ -47,26 +47,41 @@ function update(dt) {
     this.size = size;
     this.ctx = ctx;
   }
-  draw() {
+  draw(s = 1) {
+    this.ctx.save();
+    this.ctx.globalAlpha = 0;
+    const cx = this.x + this.size / 2;
+    const cy = this.y + this.size / 2;
+    this.ctx.translate(cx, cy);
+    this.ctx.scale(s, s);
     this.ctx.fillStyle = "black";
-    this.ctx.fillRect(this.x, this.y, this.size, this.size)
+    this.ctx.fillRect(-this.size / 2, -this.size / 2, this.size, this.size)
+    this.ctx.restore();
   }
 
   // draw with controllable opacity (0..1)
-  drawWhite(alpha = 1) {
+  drawWhite(alpha = 1, s = 1) {
     this.ctx.save();
     this.ctx.globalAlpha = alpha;
+    const cx = this.x + this.size / 2;
+    const cy = this.y + this.size / 2;
+    this.ctx.translate(cx, cy);
+    this.ctx.scale(s, s);
     this.ctx.fillStyle = "white";
-    this.ctx.fillRect(this.x, this.y, this.size, this.size);
+    this.ctx.fillRect(-this.size / 2, -this.size / 2, this.size, this.size);
     this.ctx.restore();
   }
 
   // draw black with alpha (for fade-out)
-  drawBlack(alpha = 1) {
+  drawBlack(s = 1) {
     this.ctx.save();
-    this.ctx.globalAlpha = alpha;
+    this.ctx.globalAlpha = 0;
+    const cx = this.x + this.size / 2;
+    const cy = this.y + this.size / 2;
+    this.ctx.translate(cx, cy);
+    this.ctx.scale(s, s);
     this.ctx.fillStyle = "black";
-    this.ctx.fillRect(this.x, this.y, this.size, this.size);
+    this.ctx.fillRect(-this.size / 2, -this.size / 2, this.size, this.size);
     this.ctx.restore();
   }
 
@@ -102,6 +117,15 @@ const startY = canvas.height / 2 - gridH / 2;
 let RectChange = new Set()
 let Revealed = new Set() // <- new: selected rects that have been revealed by hover
 
+// scale animation state (used to animate all rects to a larger size)
+let currentScale = 1;
+let targetScale = 1;
+let scaling = false;
+const SCALE_TARGET = 1.5;
+const SCALE_SMOOTH = 6; // larger = faster
+// global alpha multiplier for white rects (set to 0 to hide all whites)
+let globalAlpha = 1;
+
 // pointer tracking for hover detection
 let mouseX = -1;
 let mouseY = -1;
@@ -109,12 +133,22 @@ let hoveredSelected = false; // true when mouse is over any selected rect
 let hoveredSelectedRect = null; // reference to the rect under pointer if any
 // require the pointer to be held down to reveal
 let isPointerDown = false;
+// whether the user has moved the mouse over any rect (used to disable automatic first reveal)
+let mouseMovedOverAnyRect = false;
 
 // named pointer handlers so we can remove them when fade-out begins
 function handlePointerMove(e) {
   const br = canvas.getBoundingClientRect();
   mouseX = (e.clientX - br.left) * (canvas.width / br.width);
   mouseY = (e.clientY - br.top) * (canvas.height / br.height);
+  // if pointer moved over any *selected* rect, mark flag so we won't auto-activate the first rect
+  for (const entry of selected) {
+    const rect = entry.rect;
+    if (mouseX >= rect.x && mouseX <= rect.x + rect.size && mouseY >= rect.y && mouseY <= rect.y + rect.size) {
+      mouseMovedOverAnyRect = true;
+      break;
+    }
+  }
 }
 
 function handlePointerDown(e) {
@@ -142,6 +176,7 @@ canvas.addEventListener('pointerup', handlePointerUp);
 canvas.addEventListener('pointercancel', handlePointerCancel);
 canvas.addEventListener('pointerout', handlePointerOut);
 
+/*
 function disableInteractions() {
   // remove pointer listeners and prevent further clicks
   try {
@@ -150,8 +185,6 @@ function disableInteractions() {
     canvas.removeEventListener('pointerup', handlePointerUp);
     canvas.removeEventListener('pointercancel', handlePointerCancel);
     canvas.removeEventListener('pointerout', handlePointerOut);
-    // remove click handler if it was added by enableClick
-    canvas.removeEventListener('click', handleCanvasClick);
   } catch (err) {
     // ignore removal errors
   }
@@ -161,7 +194,7 @@ function disableInteractions() {
   mouseY = -1;
   canvas.style.cursor = 'default';
 }
-
+*/
 
 
 
@@ -213,13 +246,6 @@ const HoverRadius = 100;
 const FadeSpeed = 1.0; 
 const FadeIns = new Map(); // index -> progress (0..1)
 
-// fade-out controls (distance-based stagger)
-const FadeOuts = new Map(); // index -> { timer: seconds (negative = waiting), progress: 0..1 }
-const FadeOutSpeed = 0.8;   // seconds for a rect to fade out once its timer reaches 0
-const FadeOutMaxDelay = 0.6; // max additional delay based on distance (seconds)
-let fadingOutStarted = false;
-let allHidden = false;
-
 // selected/others will be recomputed each frame in update
 
 let selected = [];
@@ -236,16 +262,12 @@ const startVisible = () => {
   const first = Array.from(RectChange)[0];
   if (first === undefined) return;
   // begin fade-in for that index
-  if (Revealed.has(first) || FadeIns.has(first)) {
-    console.log("startVisible: skipping, already revealed or fading:", first);
+  // do not auto-activate first rect if the user has already moved the mouse over any rect
+  if (mouseMovedOverAnyRect) {
+    console.log('startVisible skipped because mouse moved over a rect');
     return;
   }
-  for (const idx of Revealed) {
-    if (idx !== first) {
-      console.log("startVisible: skipping because another rect was revealed:", idx);
-      return;
-    }
-  }
+  
 
   FadeIns.set(first, 0);
   console.log("start fade in index", first);
@@ -259,47 +281,17 @@ function allSelectedRevealed() {
   return true;
 }
 
-const enableClick = () => {
-  canvas.style.cursor = "pointer";
-  function handleCanvasClick(e) {
-    if (fadingOutStarted) return;
-    fadingOutStarted = true;
-    // disable all pointer interactions immediately
-    disableInteractions();
-    console.log("canvas clicked, starting fade-out...");
 
-    const br = canvas.getBoundingClientRect();
-    const mx = (e.clientX - br.left) * (canvas.width / br.width);
-    const my = (e.clientY - br.top) * (canvas.height / br.height);
-
-    // compute centers and max distance to determine relative delay
-    const centers = rects.map(r => ({ cx: r.x + r.size / 2, cy: r.y + r.size / 2 }));
-    let maxD = 0;
-    for (const c of centers) maxD = Math.max(maxD, Math.hypot(mx - c.cx, my - c.cy));
-
-    // schedule every rect with a delay proportional to its distance
-    for (let i = 0; i < rects.length; i++) {
-      const c = centers[i];
-      const d = Math.hypot(mx - c.cx, my - c.cy);
-      const delay = maxD === 0 ? 0 : (d / maxD) * FadeOutMaxDelay;
-      FadeOuts.set(i, { timer: -delay, progress: 0 });
-    }
-  }
-  // keep the once: true behavior
-  canvas.addEventListener('click', handleCanvasClick, { once: true });
-}
 
 let allRevealedTriggered = false;
 function onAllRevealed() {
-  enableClick();
+  // start scaling all rects toward the target
+  targetScale = SCALE_TARGET;
+  scaling = true;
 }
 
 function update(dt) {
-  // If already fully hidden, clear and return
-  if (allHidden) {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    return;
-  }
+  
 
   canvas.style.background = "black";
 
@@ -310,13 +302,12 @@ function update(dt) {
   // but DO NOT reveal anymore once fade-out has started (prevents re-appearing before finish)
   hoveredSelected = false;
   hoveredSelectedRect = null;
-  if (!fadingOutStarted && isPointerDown && mouseX >= 0 && mouseY >= 0) {
+  if (isPointerDown && mouseX >= 0 && mouseY >= 0) {
     for (const entry of selected) {
       if (entry.rect.contains(mouseX, mouseY)) {
         hoveredSelected = true;
         hoveredSelectedRect = entry.rect;
-        // also avoid re-revealing rects that are already scheduled to fade out
-        if (!FadeOuts.has(entry.i)) Revealed.add(entry.i);
+        Revealed.add(entry.i);
         break;
       }
     }
@@ -335,31 +326,7 @@ function update(dt) {
     }
   }
 
-  // advance fade-outs (timer -> progress) -- keep entries until whole sequence finishes
-  if (FadeOuts.size > 0) {
-    for (const [i, obj] of Array.from(FadeOuts.entries())) {
-      obj.timer += dt;
-      if (obj.timer >= 0) {
-        obj.progress = Math.min(1, obj.timer / FadeOutSpeed);
-      }
-      FadeOuts.set(i, obj);
-    }
-
-    // check if all fade-outs finished
-    let allDone = true;
-    for (const [i, obj] of FadeOuts.entries()) {
-      if (obj.progress < 1) { allDone = false; break; }
-    }
-    if (fadingOutStarted && allDone) {
-      allHidden = true;
-      FadeOuts.clear();
-      RectChange.clear();
-      Revealed.clear();
-      console.log("fade-out completed -> canvas blank");
-      finish();
-      
-    }
-  }
+  
 
   // draw selected: combine fade-in, revealed, proximity-based alpha and fade-outs
   selected.forEach(({ rect, i }) => {
@@ -375,31 +342,36 @@ function update(dt) {
       alpha = Math.max(0, 1 - d / HoverRadius);
     }
 
-    // apply fade-out if scheduled
-    if (FadeOuts.has(i)) {
-      const fo = FadeOuts.get(i);
-      const foProg = Math.max(0, Math.min(1, fo.progress));
-      alpha = Math.max(0, alpha * (1 - foProg));
-    }
+ 
 
-    if (alpha > 0) rect.drawWhite(alpha);
+    if (alpha > 0) rect.drawWhite(alpha * globalAlpha, currentScale);
   });
 
-  // draw non-selected rects, respect fade-outs
+  // draw non-selected rects (respect global scale)
   others.forEach(({ rect, i }) => {
-    if (FadeOuts.has(i)) {
-      const fo = FadeOuts.get(i);
-      const foProg = Math.max(0, Math.min(1, fo.progress));
-      const alpha = Math.max(0, 1 - foProg);
-      if (alpha > 0) rect.drawBlack(alpha);
-    } else {
-      rect.draw();
-    }
+    rect.draw(currentScale);
   });
 
   if (!allRevealedTriggered && allSelectedRevealed()) {
     allRevealedTriggered = true;
     onAllRevealed();
+  }
+
+  // advance global scale toward target when scaling is active
+  if (scaling) {
+    const a = 1 - Math.exp(-SCALE_SMOOTH * dt);
+    currentScale += (targetScale - currentScale) * a;
+    if (Math.abs(currentScale - targetScale) < 0.001) {
+      currentScale = targetScale;
+      scaling = false;
+      if (currentScale >= targetScale) {
+        setTimeout(() => {
+          globalAlpha = 0;
+        }, 500);
+        setTimeout(() => {finish();}, 1000);
+        
+      }
+    }
   }
 
 }

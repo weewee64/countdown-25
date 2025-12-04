@@ -32,7 +32,17 @@ const SNAP_LOCK_DELAY = 1;
 const FLICK_SPEED = 220;
 // delay (seconds) after creation before an item can be grabbed
 const GRAB_LOCK_DELAY = 0.5;
+// delay for the very first drop (milliseconds)
+const FIRST_DROP_DELAY_MS = 1;
 let allPlacedTriggered = false;
+// cycleStage: 0 = first-complete -> drop one; 1 = second-complete -> drop all
+let cycleStage = 0;
+// when true, the stage-2 (5-drop) has already occurred and should not repeat
+let stage2DropDone = false;
+
+// final fade/finish state
+let globalAlpha = 1;
+let endSequenceScheduled = false;
 
 // global fade-out when puzzle completed
 let fadeAll = false;
@@ -40,21 +50,8 @@ let overallAlpha = 1;
 const FADE_ALL_DURATION = 1.2; // seconds
 
 let alphaLvl = 0;
-// delay before fade-in starts (seconds)
-let fadeDelay = 50;
-// timer accumulating time since start
-let fadeTimer = 0;
-// pointer drag measurement
-let isPointerDown = false;
-let pointerStartX = 0;
-let pointerStartY = 0;
-let lastDragDistance = 0; // last measured distance (px)
-// if the user adjusts alpha via drag, disable the automatic initial fade
-let userTouchedAlpha = false;
-// lock alpha when it reaches full opacity
-let alphaLocked = false;
-// alpha value at the start of the current drag (used to accumulate)
-let dragStartAlpha = 0;
+// automatic fade duration (seconds) from 0 -> 1 at start
+const AUTO_FADE_DURATION = 2;
 // once alpha reaches 1, pick a random subset of selected rects
 let selectedSubset = [];
 let subsetCreated = false;
@@ -85,30 +82,34 @@ function pickRandomSubsetFromSelected(count) {
     this.y = y;
     this.size = size;
     this.ctx = ctx;
-  }
-  draw() {
-    this.ctx.save();
-    this.ctx.globalAlpha = overallAlpha;
-    this.ctx.fillStyle = "black";
-    this.ctx.fillRect(this.x, this.y, this.size, this.size)
-    this.ctx.restore();
+    this.isGrey = false;
   }
 
+
   // draw with controllable opacity (0..1)
-  drawWhite() {
+  drawWhite(alpha = 1, s = 1) {
     this.ctx.save();
-    this.ctx.globalAlpha = alphaLvl;
-    this.ctx.fillStyle = "white";
-    this.ctx.fillRect(this.x, this.y, this.size, this.size);
+    this.ctx.globalAlpha = alpha;
+    const cx = this.x + this.size / 2;
+    const cy = this.y + this.size / 2;
+    this.ctx.translate(cx, cy);
+    this.ctx.scale(s, s);
+    // render slightly grey when flagged
+    this.ctx.fillStyle = this.isGrey ? "rgba(126, 126, 126, 1)" : "white";
+    this.ctx.fillRect(-this.size / 2, -this.size / 2, this.size, this.size);
     this.ctx.restore();
   }
 
   // draw black with alpha (for fade-out)
-  drawBlack() {
+  drawBlack(s = 1) {
     this.ctx.save();
     this.ctx.globalAlpha = 0;
+    const cx = this.x + this.size / 2;
+    const cy = this.y + this.size / 2;
+    this.ctx.translate(cx, cy);
+    this.ctx.scale(s, s);
     this.ctx.fillStyle = "black";
-    this.ctx.fillRect(this.x, this.y, this.size, this.size);
+    this.ctx.fillRect(-this.size / 2, -this.size / 2, this.size, this.size);
     this.ctx.restore();
   }
 
@@ -148,8 +149,6 @@ canvas.addEventListener('pointerdown', (e) => {
   const mx = (e.clientX - br.left) * (canvas.width / br.width);
   const my = (e.clientY - br.top) * (canvas.height / br.height);
 
-
-
   for (let i = 0; i < rects.length; i++) {
     const r = rects[i];
     if (mx >= r.x && mx <= r.x + r.size && my >= r.y && my <= r.y + r.size) {
@@ -158,14 +157,7 @@ canvas.addEventListener('pointerdown', (e) => {
     }
   }
 
-    // record start position for drag distance
-  isPointerDown = true;
-  pointerStartX = mx;
-  pointerStartY = my;
-    // capture alpha at drag start so multiple small drags accumulate
-    dragStartAlpha = alphaLvl;
-    userTouchedAlpha = true;
-  // update global mouse state
+  // update global mouse state (used by DragManager)
   mouseX = mx; mouseY = my; mouseIsDown = true;
   // initialize pointer velocity tracking
   prevMouseX = mx; prevMouseY = my; prevMouseTime = performance.now() / 100;
@@ -173,24 +165,17 @@ canvas.addEventListener('pointerdown', (e) => {
 }); 
 
 canvas.addEventListener('pointerup', (e) => {
-  if (!isPointerDown) return;
   const br = canvas.getBoundingClientRect();
   const mx = (e.clientX - br.left) * (canvas.width / br.width);
   const my = (e.clientY - br.top) * (canvas.height / br.height);
-  const dx = mx - pointerStartX;
-  const dy = my - pointerStartY;
-  lastDragDistance = Math.hypot(dx, dy);
-  console.log('pointer drag distance (px):', lastDragDistance.toFixed(2));
-  isPointerDown = false;
   // update global mouse state
   mouseX = mx; mouseY = my; mouseIsDown = false;
 });
 
-canvas.addEventListener('pointercancel', () => { isPointerDown = false; });
+canvas.addEventListener('pointercancel', () => { mouseIsDown = false; });
 
-// update drag distance continuously while pointer is down
+// always track pointer velocity (used later for fling on release)
 canvas.addEventListener('pointermove', (e) => {
-  if (!isPointerDown) return;
   const br = canvas.getBoundingClientRect();
   const mx = (e.clientX - br.left) * (canvas.width / br.width);
   const my = (e.clientY - br.top) * (canvas.height / br.height);
@@ -204,24 +189,6 @@ canvas.addEventListener('pointermove', (e) => {
   pointerVx = pointerVx * smooth + vx * (1 - smooth);
   pointerVy = pointerVy * smooth + vy * (1 - smooth);
   prevMouseX = mx; prevMouseY = my; prevMouseTime = now;
-  const dx = mx - pointerStartX;
-  const dy = my - pointerStartY;
-  lastDragDistance = Math.hypot(dx, dy);
-  // map drag distance to alpha immediately and mark user interaction
-  if (!alphaLocked) {
-    const scale = 1000; // pixels -> controls how much drag maps to full alpha
-    const mapped = Math.max(0, Math.min(1, lastDragDistance / scale));
-    // cumulative behavior: add mapped fraction to the alpha at drag start
-    const candidate = dragStartAlpha + mapped;
-    if (candidate > alphaLvl) {
-      alphaLvl = Math.min(1, candidate);
-      if (alphaLvl >= 1) {
-        alphaLvl = 1;
-        alphaLocked = true;
-        console.log('alpha locked at 1');
-      }
-    }
-  }
   // update global mouse position while moving
   mouseX = mx; mouseY = my;
 });
@@ -255,29 +222,33 @@ let notDraw = [];
     else notDraw.push({ rect, i });
   });
 
+// scale animation state (animate all rects when subset has filled slots)
+let currentScale = 1;
+let targetScale = 1;
+let scaling = false;
+const SCALE_TARGET = 1.5;
+const SCALE_SMOOTH = 6; // larger = faster
+
 function update(dt) {
   canvas.style.background = "black";
 
 
 
   // draw selected: combine fade-in, revealed, proximity-based alpha and fade-outs
-  selected.forEach(({ rect}) => {
-    // advance fade timer; only begin increasing alpha after the delay
-    fadeTimer += dt;
-    // if the user hasn't manually adjusted alpha, run the automatic fade-to-0.1
-    if (!userTouchedAlpha) {
-      if (fadeTimer >= fadeDelay) {
-        // first ramp up to the small base alpha (0.1)
-        if (alphaLvl < 0.1) {
-          alphaLvl = Math.min(0.1, alphaLvl + dt * 0.01);
-        }
+  // automatic fade from 0 -> 1 at start (advance once per frame)
+  if (!subsetCreated) {
+    alphaLvl = Math.min(1, alphaLvl + dt / AUTO_FADE_DURATION);
+  }
+  // Draw selected rects that are NOT part of the physics-driven subset first.
+  // The subset (falling) items are drawn later so they appear in front.
+  selected.forEach(({ rect }) => {
+    let inSubset = false;
+    if (subsetCreated) {
+      for (const e of selectedSubset) {
+        if (e.rect === rect) { inSubset = true; break; }
       }
-    } else {
-      // user already touched alpha: we've already updated alphaLvl in pointermove
-      // keep alphaLvl clamped to [0,1] and respect a final lock at 1
-      alphaLvl = Math.max(0, Math.min(1, alphaLvl));
     }
-    rect.drawWhite();
+    if (!inSubset) rect.drawWhite(alphaLvl * globalAlpha, currentScale);
   });
 
   // once alpha hits full and we haven't created the subset yet, create it
@@ -299,6 +270,10 @@ function update(dt) {
       });
       // attach body to the entry so we can sync position later
       entry.body = body;
+      // track whether the user is actively dragging this entry
+      entry.isBeingDragged = false;
+      // keep bodies fixed at creation so they don't all fall simultaneously
+      entry.body.isFixed = true;
       // when this entry becomes eligible to be grabbed
       entry.canGrabAt = performance.now() / 1000 + GRAB_LOCK_DELAY;
 
@@ -326,11 +301,13 @@ function update(dt) {
           if (entry.immobilized) return;
           // freeze physics integration while user drags to avoid jitter
           t.isFixed = true;
+          entry.isBeingDragged = true;
           // reset lastPosition so verlet velocity doesn't introduce a big impulse
           t.lastPositionX = t.positionX;
           t.lastPositionY = t.positionY;
         },
         onStopDrag: (t) => {
+          entry.isBeingDragged = false;
           // if this entry has been immobilized (snapped into a slot), keep it fixed
           if (entry.immobilized) {
             t.isFixed = true;
@@ -373,6 +350,10 @@ function update(dt) {
         const r = entry.rect;
         r.x = b.positionX - r.size / 2;
         r.y = b.positionY - r.size / 2;
+        // mark grey only when the body is dynamic (not fixed) and not immobilized
+        if (entry.body) {
+          r.isGrey = (!entry.immobilized && (!entry.body.isFixed || entry.isBeingDragged));
+        }
       }
     }
 
@@ -422,20 +403,92 @@ function update(dt) {
       }
     }
 
-    // when all are placed, trigger the final action once
-    if (!allPlacedTriggered && subsetCreated && selectedSubset.length > 0) {
-      const immobilized = selectedSubset.filter(e => e.immobilized).length;
-      if (immobilized === selectedSubset.length) {
+    // when all are placed: drop a number of rects based on cycleStage (1 -> 3 -> 5)
+    // skip if the final stage (5-drop) has already happened once
+    if (!allPlacedTriggered && subsetCreated && selectedSubset.length > 0 && !stage2DropDone) {
+      const immobilizedCount = selectedSubset.filter(e => e.immobilized).length;
+      
+      if (immobilizedCount === selectedSubset.length) {
         allPlacedTriggered = true;
-        // start fading all rects
-        fadeAll = true;
-        alphaLvl = 1;
-        const fadeMs = Math.max(100, Math.floor(FADE_ALL_DURATION * 1000));
-        // call finish after the fade completes (add small buffer)
-        setTimeout(() => {
-          try { finish(); } catch (e) { console.warn('finish() failed', e); }
-        }, fadeMs + 80);
-        console.log('All selectedSubset rects placed! starting fade...');
+        const dtEstimate = 1 / 60;
+        const downV = 300; // px/s initial downward velocity
+
+        // determine how many to drop this cycle
+        let dropCount = 1;
+        if (cycleStage === 0) dropCount = 1;
+        else if (cycleStage === 1) dropCount = 3;
+        else dropCount = 5;
+
+        // pick from currently immobilized entries only
+        const immobilizedEntries = selectedSubset.filter(e => e.immobilized && e.body);
+        // clamp dropCount to available immobilized entries
+        const take = Math.min(dropCount, immobilizedEntries.length);
+        // shuffle indices to sample without replacement
+        const indices = Array.from({ length: immobilizedEntries.length }, (_, i) => i);
+        for (let i = indices.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [indices[i], indices[j]] = [indices[j], indices[i]];
+        }
+        
+          
+        
+        const chosen = indices.slice(0, take);
+
+        // performDrop encapsulates the release logic so we can optionally
+        // delay only the very first drop using setTimeout.
+        function performDrop() {
+          for (const idx of chosen) {
+            const entry = immobilizedEntries[idx];
+            if (!entry || !entry.body) continue;
+            entry.immobilized = false;
+            entry.body.isFixed = false;
+            const flickVx = (Math.random() * 2 - 1) * (FLICK_SPEED * 0.6);
+            entry.body.lastPositionX = entry.body.positionX - flickVx * dtEstimate;
+            entry.body.lastPositionY = entry.body.positionY - downV * dtEstimate;
+            if (entry.dragObj) entry.dragObj.disabled = false;
+            // clear its occupied slot if any
+            for (const slot of slots) {
+              if (slot.occupied === entry) {
+                slot.occupied = null;
+                slot.canSnapAt = performance.now() / 1000 + SNAP_LOCK_DELAY;
+                break;
+              }
+            }
+          }
+
+          // advance cycle stage (max out to keep behavior predictable)
+          cycleStage = Math.min(cycleStage + 1, 2);
+
+          // if we just performed the largest drop (5), mark it done so it won't repeat
+          if (dropCount >= 5) {
+            stage2DropDone = true;
+          }
+
+          // allow detection again after a short delay
+          setTimeout(() => { allPlacedTriggered = false; }, 200);
+        }
+
+        // If this is the very first drop cycle, optionally delay it so the user
+        // sees the completed placement briefly before pieces fall.
+        if (cycleStage === 0 && typeof FIRST_DROP_DELAY_MS === 'number' && FIRST_DROP_DELAY_MS > 0) {
+          setTimeout(performDrop, FIRST_DROP_DELAY_MS);
+        } else {
+          performDrop();
+        }
+      }
+    }
+    
+    // If the stage-2 (5-drop) already happened and the user has placed all items back,
+    // trigger the final scale-up (rects grow to SCALE_TARGET).
+    if (stage2DropDone && !allPlacedTriggered && subsetCreated && selectedSubset.length > 0) {
+      const immobilizedCount2 = selectedSubset.filter(e => e.immobilized).length;
+      if (immobilizedCount2 === selectedSubset.length) {
+        allPlacedTriggered = true;
+        targetScale = SCALE_TARGET;
+        scaling = true;
+        console.log('Stage-2 re-placement detected -> scaling to', SCALE_TARGET);
+        // allow detection again after a short delay
+        setTimeout(() => { allPlacedTriggered = false; }, 200);
       }
     }
   }
@@ -444,9 +497,40 @@ function update(dt) {
   notDraw.forEach(({ rect, i }) => {
     rect.drawBlack();
   });
+
+  // draw the physics-driven subset last so they render on top of the grid
+  if (subsetCreated) {
+    for (const entry of selectedSubset) {
+      if (entry && entry.rect) {
+        entry.rect.drawWhite(alphaLvl * globalAlpha, currentScale);
+      }
+    }
+  }
   // animate global fade when triggered
   if (fadeAll) {
     alphaLvl = Math.max(0, alphaLvl - dt / FADE_ALL_DURATION);
+  }
+
+  // advance global scale toward target when scaling is active
+  if (scaling) {
+    const a = 1 - Math.exp(-SCALE_SMOOTH * dt);
+    currentScale += (targetScale - currentScale) * a;
+    if (Math.abs(currentScale - targetScale) < 0.001) {
+      currentScale = targetScale;
+      scaling = false;
+    }
+  }
+
+  // When we reach the target scale (and target is the final scale), schedule fade then finish.
+  // Only schedule once.
+  if (!endSequenceScheduled && targetScale === SCALE_TARGET && currentScale >= targetScale) {
+    endSequenceScheduled = true;
+    setTimeout(() => {
+      globalAlpha = 0;
+    }, 500);
+    setTimeout(() => {
+      try { finish(); } catch (e) { console.warn('finish() failed', e); }
+    }, 1000);
   }
 }
 

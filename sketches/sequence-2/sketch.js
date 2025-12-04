@@ -16,26 +16,30 @@ canvas.style.cursor = "pointer";
 
 
   // draw with controllable opacity (0..1)
-  drawWhite(alpha = 1) {
+  drawWhite(alpha = 1, s = 1) {
     this.ctx.save();
     this.ctx.globalAlpha = alpha;
+    const cx = this.x + this.size / 2;
+    const cy = this.y + this.size / 2;
+    this.ctx.translate(cx, cy);
+    this.ctx.scale(s, s);
     this.ctx.fillStyle = "white";
-    this.ctx.fillRect(this.x, this.y, this.size, this.size);
+    this.ctx.fillRect(-this.size / 2, -this.size / 2, this.size, this.size);
     this.ctx.restore();
   }
 
   // draw black with alpha (for fade-out)
-  drawBlack(alpha = 1) {
+  drawBlack(alpha = 1, s = 1) {
     this.ctx.save();
     this.ctx.globalAlpha = alpha;
-    
-    
+
     // fill shade depends on rotateCount: 0 -> black, higher -> lighter grey
     const rc = this.rotateCount || 0;
-    const grey = Math.min(255, rc * 10); // 0,80,160,240...
+    const grey = Math.min(255, rc * 10);
     this.ctx.fillStyle = `rgb(${grey},${grey},${grey})`;
     this.ctx.lineWidth = 1.5;
     this.ctx.strokeStyle = `rgb(${grey},${grey},${grey})`;
+
     // choose rotation origin (supports 'center' and 'bottomRight')
     let offsetX = this.size / 2;
     let offsetY = this.size / 2;
@@ -46,10 +50,24 @@ canvas.style.cursor = "pointer";
     const centerx = this.x + offsetX;
     const centery = this.y + offsetY;
     this.ctx.translate(centerx, centery);
+    // apply scaling around the chosen origin
+    this.ctx.scale(s, s);
     const angle = this.angle || 0;
     this.ctx.rotate(angle);
     this.ctx.fillRect(-offsetX, -offsetY, this.size, this.size);
     this.ctx.strokeRect(-offsetX, -offsetY, this.size, this.size);
+    this.ctx.restore();
+  }
+
+  // generic draw that respects scaling around center
+  draw(s = 1) {
+    this.ctx.save();
+    const cx = this.x + this.size / 2;
+    const cy = this.y + this.size / 2;
+    this.ctx.translate(cx, cy);
+    this.ctx.scale(s, s);
+    this.ctx.fillStyle = "black";
+    this.ctx.fillRect(-this.size / 2, -this.size / 2, this.size, this.size);
     this.ctx.restore();
   }
 
@@ -147,14 +165,27 @@ let selected = [];
 let notDraw = [];
 let mask = []
 
+// scale animation state (animate all rects when masks have fallen)
+let currentScale = 1;
+let targetScale = 1;
+let scaling = false;
+const SCALE_TARGET = 1.5;
+const SCALE_SMOOTH = 6; // larger = faster
+let allMasksFallenTriggered = false;
+
+// global alpha used for final fade-out
+let globalAlpha = 1;
+// ensure we only schedule the end sequence once
+let endSequenceScheduled = false;
+
 // click counter to scale how many masks are affected per click
 let clickCount = 0;
 
 // small canvas punch rotation (spring)
 let punchAngle = 0;
 let punchVel = 0;
-const punchSpring = 40; // stiffness
-const punchDamp = 8; // damping
+const punchSpring = 50; // stiffness
+const punchDamp = 1; // damping
 
 // rotating-mask selection: after a short delay one mask will tilt/rotate
 let rotatingMaskIndex = -1;
@@ -170,8 +201,12 @@ const falling = new Map();
 // map to track falling for original selected rects
 const fallingSelected = new Map();
 
+// final-click gating: only allow the final click after all masks have fallen + delay
+const FINAL_CLICK_DELAY = 1; // seconds
+let finalClickEnabled = false;
+
 // click to make a random mask rect fall
-canvas.addEventListener('click', () => {
+canvas.addEventListener('click', (e) => {
   // if a rotation was scheduled but hasn't started yet, cancel it
   if (rotationScheduled && rotationTimeoutId) {
     clearTimeout(rotationTimeoutId);
@@ -188,30 +223,64 @@ canvas.addEventListener('click', () => {
     // only consider mask entries that are not currently falling and haven't already fallen
     if (!falling.has(i) && !mask[i].fallen) available.push(i);
   }
+
+  /*
   if (available.length === 0) {
-    // no mask available -> start falling for all original selected rects
-    selected.forEach((entry, selectIndex) => {
-      const { rect } = entry;
-      if (!fallingSelected.has(selectIndex) && !rect.fallen) {
-        fallingSelected.set(selectIndex, { vy: 0 });
-      }
-        
-    });
-    setTimeout(() => {
-      console.log('no masks left — finishing now');
-      finish();
-    }, 2000);
+    // no mask available -> only trigger final fall/finish if final click is enabled
+    if (finalClickEnabled) {
+      selected.forEach((entry, selectIndex) => {
+        const { rect } = entry;
+        if (!fallingSelected.has(selectIndex) && !rect.fallen) {
+          fallingSelected.set(selectIndex, { vy: 0 });
+        }
+      });
+      setTimeout(() => {
+        console.log('final click: no masks left — finishing now');
+        finish();
+      }, 2000);
+    } else {
+      console.log('final click ignored: masks are not fully fallen or delay not elapsed');
+    }
     return;
   }
+    */
   // decide how many masks to affect this click: 1 + floor(clickCount / 3)
   const maxActive = 1 + Math.floor(clickCount / 3);
   const take = Math.min(maxActive, available.length);
-  // shuffle available and take first `take` indices
-  for (let i = available.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [available[i], available[j]] = [available[j], available[i]];
+
+  // compute click position in canvas space
+  const br = canvas.getBoundingClientRect();
+  const mx = (e.clientX - br.left) * (canvas.width / br.width);
+  const my = (e.clientY - br.top) * (canvas.height / br.height);
+
+  // If there are available masks, prefer those closer to the click using weighted sampling
+  let chosen = [];
+  if (available.length > 0) {
+    // build distances
+    const items = available.map(idx => {
+      const r = mask[idx];
+      const cx = r.x + r.size / 2;
+      const cy = r.y + r.size / 2;
+      const d = Math.hypot(mx - cx, my - cy);
+      return { idx, d };
+    });
+    const maxD = items.reduce((m, it) => Math.max(m, it.d), 0);
+    // compute a weight favoring small distances; if all distances are zero, use equal weights
+    let pool = items.map(it => ({ idx: it.idx, w: maxD === 0 ? 1 : Math.pow(maxD - it.d + 1, 2) }));
+    // weighted sampling without replacement
+    for (let k = 0; k < take && pool.length > 0; k++) {
+      const sum = pool.reduce((s, p) => s + p.w, 0);
+      let r = Math.random() * sum;
+      let acc = 0;
+      let pick = 0;
+      for (let i = 0; i < pool.length; i++) {
+        acc += pool[i].w;
+        if (r <= acc) { pick = i; break; }
+      }
+      chosen.push(pool[pick].idx);
+      pool.splice(pick, 1);
+    }
   }
-  const chosen = available.slice(0, take);
   chosen.forEach(index => {
     const m = mask[index];
     if (typeof m.rotateCount !== 'number') m.rotateCount = 0;
@@ -277,7 +346,17 @@ if (mask.length) {
 
 
 function update(dt) {
+  canvas.style.background = "black";
 
+  // Protect against very large `dt` values (tab inactive / resume) which
+  // can cause large integrated impulses (e.g. punchAngle) and visible jumps.
+  // If dt is huge we zero sensitive velocities and clamp dt for stable integration.
+  if (dt > 0.12) {
+    // Likely resumed from background — clear punch velocity to avoid a big angular jump
+    punchVel = 0;
+  }
+  const MAX_DT = 1 / 30; // ~33ms per frame
+  dt = Math.min(dt, MAX_DT);
 
   canvas.style.background = "black";
 
@@ -297,7 +376,7 @@ function update(dt) {
   ctx.rotate(punchAngle);
   ctx.translate(-canvasCenterX, -canvasCenterY);
 
-
+  //end punch
   // draw selected originals and animate their falling when scheduled
   selected.forEach(({ rect }, selectedIndex) => {
     const fall = fallingSelected.get(selectedIndex);
@@ -311,14 +390,15 @@ function update(dt) {
     } else {
       if (!rect.fallen) rect.y = rect.baseY;
     }
-    rect.drawWhite();
+    rect.drawWhite(globalAlpha, currentScale);
   });
 
   // rotation timer: after a short delay pick one available mask to tilt
   // (rotation scheduled via setTimeout; canceled on click if needed)
 
-// update falling mask rects (simple gravity)
-mask.forEach((rect, index) => {
+// update falling mask rects (simple gravity) and draw them with falling ones on top
+for (let index = 0; index < mask.length; index++) {
+  const rect = mask[index];
   const fall = falling.get(index);
   if (fall) {
     fall.vy += gravity * dt;
@@ -339,11 +419,65 @@ mask.forEach((rect, index) => {
     rect.angle += Math.max(-maxDelta, Math.min(maxDelta, diff));
   }
   if (rect.fallen) rect.isRotating = false;
-  rect.drawBlack();
-});
+}
+// draw masks so falling ones appear on top: first non-falling, then falling
+for (let index = 0; index < mask.length; index++) {
+  const rect = mask[index];
+  if (!falling.has(index)) {
+    rect.drawBlack(globalAlpha, currentScale);
+  }
+}
+for (let index = 0; index < mask.length; index++) {
+  const rect = mask[index];
+  if (falling.has(index)) {
+    rect.drawBlack(globalAlpha, currentScale);
+  }
+}
   
+  // detect when all masks have fallen; trigger scaling once
+  if (!allMasksFallenTriggered && mask.length > 0) {
+    let allFallen = true;
+    for (const m of mask) {
+      if (!m.fallen) { allFallen = false; break; }
+    }
+    if (allFallen) {
+      allMasksFallenTriggered = true;
+      targetScale = SCALE_TARGET;
+      scaling = true;
+      console.log('all masks fallen -> starting scale-up to', SCALE_TARGET);
+      // enable final click after a short delay so user can't trigger finish immediately
+      finalClickEnabled = false;
+      setTimeout(() => {
+        finalClickEnabled = true;
+        console.log('final click now enabled');
+      }, FINAL_CLICK_DELAY * 1000);
+    }
+  }
+
   // restore canvas transform from punch
   ctx.restore();
+
+  // advance global scale toward target when scaling is active
+  if (scaling) {
+    const a = 1 - Math.exp(-SCALE_SMOOTH * dt);
+    currentScale += (targetScale - currentScale) * a;
+    if (Math.abs(currentScale - targetScale) < 0.001) {
+      currentScale = targetScale;
+      scaling = false;
+    }
+  }
+
+  // when we've reached the target scale (and masks have fallen), schedule a small delay, fade out, then finish
+  // Note: `targetScale` starts at 1, so guard with `allMasksFallenTriggered` to avoid scheduling immediately.
+  if (!endSequenceScheduled && allMasksFallenTriggered && currentScale >= targetScale) {
+    endSequenceScheduled = true;
+    setTimeout(() => {
+      globalAlpha = 0;
+    }, 500);
+    setTimeout(() => {
+      finish();
+    }, 1000);
+  }
 
 }
 
