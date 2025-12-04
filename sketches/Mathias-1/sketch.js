@@ -3,13 +3,33 @@ import { Spring } from "../_shared/spring.js"
 import { VerletPhysics } from "../_shared/verletPhysics.js"
 import { DragManager } from "./dragManagerModif.js"
 
-const { renderer, input, math, run, finish, } = createEngine()
+const { renderer, input, math,  audio, run, finish, } = createEngine()
 const { ctx, canvas } = renderer
 
 const physics = new VerletPhysics()
 physics.gravityY = 3000
 
 const dragManager = new DragManager()
+
+const EndSound = await audio.load({
+    src: "assets/End-sound-01.mp3",
+    loop: false
+})
+
+// ensure the "correct finish" sound plays only once
+let correctFinishPlayed = false;
+const correctFinishSound = await audio.load({
+    src: "assets/correct.mp3",
+    loop: false
+})
+
+const mouseClickSound = await audio.load({
+    src: "assets/click.mp3",
+    loop: false
+})
+
+// disable click sounds after the sequence ends
+let mouseClickDisabled = false;
 
 // physics bounds
 physics.bounds = { left: 0, right: canvas.width, top: 0, bottom: canvas.height }
@@ -43,6 +63,8 @@ let stage2DropDone = false;
 // final fade/finish state
 let globalAlpha = 1;
 let endSequenceScheduled = false;
+
+
 
 // global fade-out when puzzle completed
 let fadeAll = false;
@@ -155,6 +177,10 @@ canvas.addEventListener('pointerdown', (e) => {
     const r = rects[i];
     if (mx >= r.x && mx <= r.x + r.size && my >= r.y && my <= r.y + r.size) {
       console.log('clicked rect index:', i, 'rect:', r);
+      // play click sound only when this rect is grey (dynamic/dragged) and clicks are enabled
+      if (!mouseClickDisabled && r && r.isGrey) {
+        try { mouseClickSound.play(); } catch (err) { /* ignore audio errors */ }
+      }
       break; // remove if you want multiple hits
     }
   }
@@ -485,6 +511,12 @@ function update(dt) {
     if (stage2DropDone && !allPlacedTriggered && subsetCreated && selectedSubset.length > 0) {
       const immobilizedCount2 = selectedSubset.filter(e => e.immobilized).length;
       if (immobilizedCount2 === selectedSubset.length) {
+        // play completion sound once when the final re-placement is detected
+        if (!correctFinishPlayed) {
+          try { correctFinishSound.play(); } catch (e) { /* ignore playback errors */ }
+          correctFinishPlayed = true;
+        }
+
         allPlacedTriggered = true;
         targetScale = SCALE_TARGET;
         scaling = true;
@@ -509,8 +541,12 @@ function update(dt) {
       const dy = mouseY - cy;
       const d = Math.hypot(dx, dy);
       // proximity t in [0..1] where 1 is at center, 0 at or beyond radius
-      const t = Math.max(0, 1 - d / SLOT_HIGHLIGHT_RADIUS);
-      const grey = Math.round(t * 180); // 0..180 grey range
+      // If the end sequence has been scheduled, force slot visuals to black
+      let grey = 0;
+      if (!endSequenceScheduled) {
+        const t = Math.max(0, 1 - d / SLOT_HIGHLIGHT_RADIUS);
+        grey = Math.round(t * 180); // 0..180 grey range
+      }
       ctx.save();
       ctx.globalAlpha = 1; // slot highlight opacity (can be adjusted)
       ctx.fillStyle = `rgb(${grey}, ${grey}, ${grey})`;
@@ -544,8 +580,11 @@ function update(dt) {
   if (!endSequenceScheduled && targetScale === SCALE_TARGET && currentScale >= targetScale) {
     endSequenceScheduled = true;
     setTimeout(() => {
+      EndSound.play()
       globalAlpha = 0;
     }, 1500);
+    // disable click sounds once the end sound / fade is scheduled
+    setTimeout(() => { mouseClickDisabled = true; }, 1500);
     setTimeout(() => {
       try { finish(); } catch (e) { console.warn('finish() failed', e); }
     }, 2000);

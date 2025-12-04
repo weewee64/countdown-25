@@ -1,8 +1,32 @@
 import { createEngine } from "../_shared/engine.js"
 // import { Spring } from "../_shared/spring.js"
 
-const { renderer, input, math, run, finish, } = createEngine()
+const { renderer, input, math, audio, run, finish, } = createEngine()
 const { ctx, canvas } = renderer
+
+let clickSoundActive = true
+const clickSound = await audio.load({
+    src: "assets/Punch-02.mp3",
+})
+
+const correctFinishSound = await audio.load({
+    src: "assets/correct.mp3",
+    loop: false
+})
+
+const EndSound = await audio.load({
+    src: "assets/End-sound-01.mp3",
+    loop: false
+})
+
+
+/*
+impactSound.play({
+            rate: 1 + Math.random() * 1,
+            volume: 0.5 + Math.random() * 0.5
+        })
+*/
+
 
 canvas.style.cursor = "pointer";
 /*
@@ -117,6 +141,7 @@ canvas.addEventListener('pointerdown', (e) => {
   const br = canvas.getBoundingClientRect();
   const mx = (e.clientX - br.left) * (canvas.width / br.width);
   const my = (e.clientY - br.top) * (canvas.height / br.height);
+  
 
   for (let i = 0; i < rects.length; i++) {
     const r = rects[i];
@@ -207,12 +232,13 @@ const falling = new Map();
 // map to track falling for original selected rects
 const fallingSelected = new Map();
 
-// final-click gating: only allow the final click after all masks have fallen + delay
-const FINAL_CLICK_DELAY = 1; // seconds
-let finalClickEnabled = false;
 
 // click to make a random mask rect fall
 canvas.addEventListener('click', (e) => {
+  // if clicks are disabled (end of sequence), ignore the event
+  if (!clickSoundActive) return;
+ clickSound.play(); 
+  
   // if a rotation was scheduled but hasn't started yet, cancel it
   if (rotationScheduled && rotationTimeoutId) {
     clearTimeout(rotationTimeoutId);
@@ -446,16 +472,13 @@ for (let index = 0; index < mask.length; index++) {
       if (!m.fallen) { allFallen = false; break; }
     }
     if (allFallen) {
+      correctFinishSound.play()
       allMasksFallenTriggered = true;
       targetScale = SCALE_TARGET;
       scaling = true;
       console.log('all masks fallen -> starting scale-up to', SCALE_TARGET);
       // enable final click after a short delay so user can't trigger finish immediately
-      finalClickEnabled = false;
-      setTimeout(() => {
-        finalClickEnabled = true;
-        console.log('final click now enabled');
-      }, FINAL_CLICK_DELAY * 1000);
+      
     }
   }
 
@@ -476,8 +499,11 @@ for (let index = 0; index < mask.length; index++) {
   // Note: `targetScale` starts at 1, so guard with `allMasksFallenTriggered` to avoid scheduling immediately.
   if (!endSequenceScheduled && allMasksFallenTriggered && currentScale >= targetScale) {
     endSequenceScheduled = true;
+    
     setTimeout(() => {
       globalAlpha = 0;
+      clickSoundActive = false;
+      EndSound.play()
     }, 1500);
     setTimeout(() => {
       finish();

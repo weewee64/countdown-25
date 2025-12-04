@@ -1,44 +1,27 @@
 import { createEngine } from "../_shared/engine.js"
 import { Spring } from "../_shared/spring.js"
 
-const { renderer, input, math, run, finish, } = createEngine()
+const { renderer, input, math, audio, run, finish, } = createEngine()
 const { ctx, canvas } = renderer
-run(update)
 
-/*
-const spring = new Spring({
-  position: 0,
-  frequency: 2.5,
-  halfLife: 0.05
+const EndSound = await audio.load({
+    src: "assets/End-sound-01.mp3",
+    loop: false
 })
 
 
-function update(dt) {
+const correctFinishSound = await audio.load({
+    src: "assets/correct.mp3",
+    loop: false
+})
 
-  if (input.isPressed()) {
-    spring.target = 0
-  }
-  else {
-    spring.target = 1
-  }
+const mouseMoveSound = await audio.load({
+    src: "assets/moving.wav",
+    loop: true
+})
 
-  spring.step(dt)
+run(update)
 
-  const x = canvas.width / 2;
-  const y = canvas.height / 2;
-  const scale = Math.max(spring.position, 0)
-
-  ctx.fillStyle = "black"
-  ctx.fillRect(0, 0, canvas.width, canvas.height)
-
-  ctx.fillStyle = "white"
-  ctx.textBaseline = "middle"
-  ctx.font = `${canvas.height}px Helvetica Neue, Helvetica , bold`
-  ctx.textAlign = "center"
-  ctx.translate(x, y)
-  ctx.scale(scale, scale)
-  ctx.fillText("3", 0, 0)
-*/
 
   class ClassRect {
   constructor(x, y, size, ctx) {
@@ -136,6 +119,19 @@ let isPointerDown = false;
 // whether the user has moved the mouse over any rect (used to disable automatic first reveal)
 let mouseMovedOverAnyRect = false;
 
+// mouse-move sound control
+let prevMouseX = 0;
+let prevMouseY = 0;
+let prevMouseTime = performance.now();
+let mouseMoveHandle = null;
+let mouseMoveDisabled = false; // when true, do not start/resume moving sound
+// tuning: map speed (px/s) to playback rate
+const MOUSE_MOVE_MIN_RATE = 0.9;
+const MOUSE_MOVE_MAX_RATE = 3.0;
+const MOUSE_MOVE_MAX_SPEED = 2000; // px/s -> clamp
+const MOUSE_MOVE_MIN_VOLUME = 0.08;
+const MOUSE_MOVE_MAX_VOLUME = 2.0;
+
 // named pointer handlers so we can remove them when fade-out begins
 function handlePointerMove(e) {
   const br = canvas.getBoundingClientRect();
@@ -148,6 +144,44 @@ function handlePointerMove(e) {
       mouseMovedOverAnyRect = true;
       break;
     }
+  }
+
+  // compute pointer speed (px/s) and drive the moving sound when pointer is down
+  const now = performance.now();
+  const dt = Math.max(1, now - prevMouseTime) / 1000; // seconds
+  const dx = mouseX - prevMouseX;
+  const dy = mouseY - prevMouseY;
+  const speed = Math.hypot(dx, dy) / dt; // px/s
+  prevMouseX = mouseX;
+  prevMouseY = mouseY;
+  prevMouseTime = now;
+
+  // only play/mix the moving sound while pointer is down and not disabled
+  if (isPointerDown && !mouseMoveDisabled) {
+    // map speed to rate and volume
+    const s = Math.max(0, Math.min(MOUSE_MOVE_MAX_SPEED, speed));
+    const t = s / MOUSE_MOVE_MAX_SPEED; // 0..1
+    const rate = MOUSE_MOVE_MIN_RATE + t * (MOUSE_MOVE_MAX_RATE - MOUSE_MOVE_MIN_RATE);
+    const volume = MOUSE_MOVE_MIN_VOLUME + t * (MOUSE_MOVE_MAX_VOLUME - MOUSE_MOVE_MIN_VOLUME);
+
+    // start the looped sound if not playing
+    try {
+      if (!mouseMoveSound.isPlaying()) {
+        mouseMoveHandle = mouseMoveSound.play({ rate, volume });
+      } else if (mouseMoveHandle) {
+        mouseMoveHandle.setRate(rate);
+        mouseMoveHandle.setVolume(volume);
+      }
+    } catch (err) {
+      // ignore audio errors
+    }
+  } else {
+    // when pointer not down, gently silence the moving sound (if we can)
+    try {
+      if (mouseMoveSound.isPlaying() && mouseMoveHandle) {
+        mouseMoveHandle.setVolume(0);
+      }
+    } catch (err) {}
   }
 }
 
@@ -164,6 +198,11 @@ function handlePointerDown(e) {
       break;
     }
   }
+
+  // initialize prev pointer for speed calculations so first delta isn't huge
+  prevMouseX = mouseX;
+  prevMouseY = mouseY;
+  prevMouseTime = performance.now();
 }
 
 function handlePointerUp() { isPointerDown = false; }
@@ -288,6 +327,7 @@ function onAllRevealed() {
   // start scaling all rects toward the target
   targetScale = SCALE_TARGET;
   scaling = true;
+  correctFinishSound.play();
 }
 
 function update(dt) {
@@ -366,7 +406,15 @@ function update(dt) {
       scaling = false;
       if (currentScale >= targetScale) {
         setTimeout(() => {
+          EndSound.play()
           globalAlpha = 0;
+          // mute / disable mouse-move sound when the final end sound plays
+          try {
+            mouseMoveDisabled = true;
+            if (mouseMoveSound.isPlaying() && mouseMoveHandle) {
+              mouseMoveHandle.setVolume(0);
+            }
+          } catch (err) { /* ignore audio errors */ }
         }, 1500);
         setTimeout(() => {finish();}, 2000);
         

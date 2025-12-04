@@ -2,8 +2,27 @@ import { createEngine } from "../_shared/engine.js"
 import { Spring } from "../_shared/spring.js"
 
 
-const { renderer, input, math, run, finish, } = createEngine()
+const { renderer, input, math, audio, run, finish, } = createEngine()
 const { ctx, canvas } = renderer
+
+
+const EndSound = await audio.load({
+    src: "assets/End-sound-01.mp3",
+    loop: false
+})
+
+const correctFinishSound = await audio.load({
+    src: "assets/correct-Finish.mp3",
+    loop: false
+})
+
+
+
+const popRectSound = await audio.load({
+    src: "assets/pop.wav",
+  })
+  
+
 
 let alphaLvl = 1; // global alpha for selected rects
 // scale state (applies to drawWhite)
@@ -226,6 +245,8 @@ function update(dt) {
       // when the rect reaches or exceeds its cap, push it outward once
       if (!rect.hasBeenPushed && typeof rect.maxScaleCap !== 'undefined' && rect.scale >= rect.maxScaleCap) {
         rect.hasBeenPushed = true;
+        // play a pop sound once when the rect becomes alert-colored
+        try { popRectSound.play(); } catch (e) { /* ignore playback errors */ }
         // compute center and target outwards position
         const cx = canvas.width / 2;
         const cy = canvas.height / 2;
@@ -267,11 +288,13 @@ function update(dt) {
 
   // If all selected rects have been pushed, schedule a fade and finish (once)
   if (!endSequenceScheduled && selected.length > 0) {
+  
     const allPushed = selected.every(({ rect }) => rect.hasBeenPushed);
     if (allPushed) {
+        correctFinishSound.play()
       endSequenceScheduled = true;
       setTimeout(() => {
-        // fade global alpha (alphaLvl) to 0 instantly after delay
+        EndSound.play()
         alphaLvl = 0;
       }, 2000);
       setTimeout(() => {
