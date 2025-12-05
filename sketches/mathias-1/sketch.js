@@ -292,7 +292,8 @@ function update(dt) {
         if (e.rect === rect) { inSubset = true; break; }
       }
     }
-    if (!inSubset) rect.drawWhite(alphaLvl * globalAlpha, currentScale);
+    // skip grey rects here so they can be drawn last (on top)
+    if (!inSubset && !rect.isGrey) rect.drawWhite(alphaLvl * globalAlpha, currentScale);
   });
 
   // once alpha hits full and we haven't created the subset yet, create it
@@ -544,8 +545,9 @@ function update(dt) {
   }
 
   // draw non-selected rects, respect fade-outs
+  // skip grey rects so they can be drawn on top later
   notDraw.forEach(({ rect, i }) => {
-    rect.drawBlack();
+    if (!rect.isGrey) rect.drawBlack();
   });
 
   // draw slot highlights (if slots exist) based on mouse proximity
@@ -571,12 +573,19 @@ function update(dt) {
     }
   }
 
-  // draw the physics-driven subset last so they render on top of the grid
+  // draw the physics-driven subset (except grey ones which will be drawn on top)
   if (subsetCreated) {
     for (const entry of selectedSubset) {
-      if (entry && entry.rect) {
+      if (entry && entry.rect && !entry.rect.isGrey) {
         entry.rect.drawWhite(alphaLvl * globalAlpha, currentScale);
       }
+    }
+  }
+
+  // draw any grey rects last so they appear above everything else
+  for (const r of rects) {
+    if (r && r.isGrey) {
+      r.drawWhite(alphaLvl * globalAlpha, currentScale);
     }
   }
 
