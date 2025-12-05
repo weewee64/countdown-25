@@ -170,7 +170,7 @@ const gridW = cols * cell;
 const gridH = rows * cell;
 // compute margin in device pixels and center the grid inside the area left after margins
 const margin = Math.round(MARGIN_CSS * DPR);
-const startX = margin + Math.round((canvas.width - 2 * margin - gridW) / 2);
+const startX = margin + Math.round((canvas.width - 2 * margin - gridW) / 2) -100;
 const startY = margin + Math.round((canvas.height - 2 * margin - gridH) / 2);
 
     for (let i = 0; i < rows; i++) {
