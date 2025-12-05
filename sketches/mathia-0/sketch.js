@@ -52,6 +52,11 @@ const POINTER_INFLUENCE_RADIUS = 200;
 const POINTER_GROW_BOOST = 80; // at pointer center, growth rate multiplier = 1 + POINTER_GROW_BOOST
 // end sequence guard
 let endSequenceScheduled = false;
+// ensure correctFinishSound only plays once
+let correctFinishPlayed = false;
+// when every rect has reached its alert color, launch an escape outward
+let escapeTriggered = false;
+const ESCAPE_DISTANCE_MULT = 0.9; // multiply canvas diagonal to push targets outside the window
 
 
 /*
@@ -303,19 +308,51 @@ function update(dt) {
   });
 
   // If all selected rects have been pushed, schedule a fade and finish (once)
-  if (!endSequenceScheduled && selected.length > 0) {
-  
+  if (selected.length > 0) {
     const allPushed = selected.every(({ rect }) => rect.hasBeenPushed);
-    if (allPushed) {
-        correctFinishSound.play()
-      endSequenceScheduled = true;
+    // once all are alert-colored, retarget them outward so they leave the window
+    if (allPushed && !escapeTriggered) {
+       // optional celebratory sound when all are alert (play once)
+      if (!correctFinishPlayed) {
+        try { correctFinishSound.play(); } catch (e) { /* ignore */ }
+        correctFinishPlayed = true;
+      }
       setTimeout(() => {
-        EndSound.play()
-        alphaLvl = 0;
-      }, 2000);
-      setTimeout(() => {
-        try { finish(); } catch (e) { console.warn('finish() failed', e); }
-      }, 2500);
+      escapeTriggered = true;
+     
+      
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+      const diag = Math.hypot(canvas.width, canvas.height);
+      const targetRadius = diag * ESCAPE_DISTANCE_MULT;
+      for (const { rect } of selected) {
+        let dx = rect.x - cx;
+        let dy = rect.y - cy;
+        if (Math.abs(dx) < 1e-3 && Math.abs(dy) < 1e-3) {
+          const a = Math.random() * Math.PI * 2;
+          dx = Math.cos(a);
+          dy = Math.sin(a);
+        }
+        const dist = Math.hypot(dx, dy) || 1;
+        const nx = dx / dist;
+        const ny = dy / dist;
+        const targetX = cx + nx * targetRadius;
+        const targetY = cy + ny * targetRadius;
+        rect.springX = new Spring({ frequency: SPRING_FREQUENCY -9.5, halfLife: SPRING_HALF_LIFE, position: rect.x, target: targetX });
+        rect.springY = new Spring({ frequency: SPRING_FREQUENCY  -9.5, halfLife: SPRING_HALF_LIFE, position: rect.y, target: targetY });
+      }
+      }, 800);
+      // after they start escaping, schedule fade and finish once
+      if (!endSequenceScheduled) {
+        endSequenceScheduled = true;
+        setTimeout(() => {
+          //EndSound.play();
+          alphaLvl = 0;
+        }, 2000);
+        setTimeout(() => {
+          try { finish(); } catch (e) { console.warn('finish() failed', e); }
+        }, 2500);
+      }
     }
   }
 

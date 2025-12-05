@@ -170,7 +170,7 @@ const gridW = cols * cell;
 const gridH = rows * cell;
 // compute margin in device pixels and center the grid inside the area left after margins
 const margin = Math.round(MARGIN_CSS * DPR);
-const startX = margin + Math.round((canvas.width - 2 * margin - gridW) / 2) -100;
+const startX = margin + Math.round((canvas.width - 2 * margin - gridW) / 2);
 const startY = margin + Math.round((canvas.height - 2 * margin - gridH) / 2);
 
     for (let i = 0; i < rows; i++) {
@@ -276,10 +276,6 @@ const SCALE_SMOOTH = 6; // larger = faster
 function update(dt) {
   canvas.style.background = "black";
 
-  // collect any rects that should be drawn on top (grey dynamic rects)
-  const topRects = [];
-  const topSet = new Set();
-
 
 
   // draw selected: combine fade-in, revealed, proximity-based alpha and fade-outs
@@ -296,15 +292,7 @@ function update(dt) {
         if (e.rect === rect) { inSubset = true; break; }
       }
     }
-    if (!inSubset) {
-      // if this rect is marked grey (dynamic), defer drawing until the end so
-      // it renders above other rects
-      if (rect.isGrey) {
-        if (!topSet.has(rect)) { topSet.add(rect); topRects.push(rect); }
-      } else {
-        rect.drawWhite(alphaLvl * globalAlpha, currentScale);
-      }
-    }
+    if (!inSubset) rect.drawWhite(alphaLvl * globalAlpha, currentScale);
   });
 
   // once alpha hits full and we haven't created the subset yet, create it
@@ -583,23 +571,12 @@ function update(dt) {
     }
   }
 
-  // draw the physics-driven subset; defer any greys to the topRects collection
+  // draw the physics-driven subset last so they render on top of the grid
   if (subsetCreated) {
     for (const entry of selectedSubset) {
       if (entry && entry.rect) {
-        if (entry.rect.isGrey) {
-          if (!topSet.has(entry.rect)) { topSet.add(entry.rect); topRects.push(entry.rect); }
-        } else {
-          entry.rect.drawWhite(alphaLvl * globalAlpha, currentScale);
-        }
+        entry.rect.drawWhite(alphaLvl * globalAlpha, currentScale);
       }
-    }
-  }
-
-  // finally draw all collected grey (dynamic) rects so they appear above everything
-  if (topRects.length > 0) {
-    for (const r of topRects) {
-      r.drawWhite(alphaLvl * globalAlpha, currentScale);
     }
   }
 
