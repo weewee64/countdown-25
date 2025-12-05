@@ -74,25 +74,41 @@ run(update)
   }
 }
 
-let rects = [] ;  
+    let rects = [] ;  
 
 const cols = 7;
 const rows = 12;
-const cell = 80;
-
-// taille totale de la grille
+// Use devicePixelRatio to keep layout consistent across displays.
+const DPR = window.devicePixelRatio || 1;
+// Compute CSS-cell size based on canvas client size so the grid fits the window (checked once at startup)
+const clientW = canvas.clientWidth || (canvas.width / DPR);
+const clientH = canvas.clientHeight || (canvas.height / DPR);
+// Outer margin in CSS pixels (adjust to increase/decrease space around the grid)
+const MARGIN_CSS = 100;
+// Available area (CSS px) after reserving margins on both sides
+const availableW = Math.max(0, clientW - 2 * MARGIN_CSS);
+const availableH = Math.max(0, clientH - 2 * MARGIN_CSS);
+// Choose the largest integer cell (CSS px) that fits the available area
+let CELL_CSS = Math.floor(Math.min(availableW / cols, availableH / rows));
+if (CELL_CSS < 8) CELL_CSS = 8; // minimum cell size
+// Make rect slightly smaller than cell so there's padding
+let RECT_SIZE_CSS = Math.max(4, Math.floor(CELL_CSS * 0.75));
+// convert to canvas (device) pixels
+const cell = Math.round(CELL_CSS * DPR);
+const rectSize = Math.round(RECT_SIZE_CSS * DPR);
+// taille totale de la grille (in device pixels)
 const gridW = cols * cell;
 const gridH = rows * cell;
-
-// centrer la grille
-const startX = canvas.width / 2 - gridW / 2;
-const startY = canvas.height / 2 - gridH / 2;
+// compute margin in device pixels and center the grid inside the area left after margins
+const margin = Math.round(MARGIN_CSS * DPR);
+const startX = margin + Math.round((canvas.width - 2 * margin - gridW) / 2);
+const startY = margin + Math.round((canvas.height - 2 * margin - gridH) / 2);
 
     for (let i = 0; i < rows; i++) {
       for (let j = 0; j < cols; j++) {
         const rectX = startX + j * cell;
         const rectY = startY + i * cell;
-        rects.push(new ClassRect(rectX, rectY, 62, ctx, ));
+        rects.push(new ClassRect(rectX, rectY, rectSize, ctx, ));
       }
     }
 
