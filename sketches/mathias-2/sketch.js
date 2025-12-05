@@ -28,7 +28,6 @@ impactSound.play({
 */
 
 
-canvas.style.cursor = "pointer";
 
 
 
